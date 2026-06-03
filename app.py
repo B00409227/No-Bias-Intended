@@ -57,6 +57,53 @@ RISK_CHIP_LABELS = {
     "vulnerability_exposure": "Deprived households in impact radius",
 }
 
+# McLellan (2026) health risk thresholds — derived from pop density and urban class
+# Diesel generator pollution spikes: risk near dense population
+# Urban heat island: Urban class + high env burden
+# Noise nuisance: any area with population density > 300/km²
+MCLELLAN_RISKS = {
+    "diesel_generator": {
+        "label": "Diesel generator pollution risk — dense population nearby (McLellan, 2026)",
+        "colour": "#6a1a1a",
+    },
+    "urban_heat_island": {
+        "label": "Urban heat island risk — waste heat in dense urban area (McLellan, 2026)",
+        "colour": "#bf360c",
+    },
+    "noise_nuisance": {
+        "label": "Noise nuisance risk — residential density exceeds 300/km² (McLellan, 2026)",
+        "colour": "#4a148c",
+    },
+    "water_competition": {
+        "label": "Water competition risk — high environmental burden catchment (McLellan, 2026)",
+        "colour": "#01579b",
+    },
+}
+
+# Scottish AI Strategy 2026-2031 governance checklist
+AI_STRATEGY_CHECKS = [
+    ("Transparent scoring — no black-box ML",            True),
+    ("Human decision-maker retains final approval",      True),
+    ("Equity indicators given equal weight to readiness",True),
+    ("Evidence confidence rated and shown per indicator", True),
+    ("Data sources cited and limitations documented",    True),
+    ("Community consultation mechanism included",        False),
+    ("Environmental Impact Assessment completed",        False),
+    ("Equalities Impact Assessment completed",           False),
+]
+
+# NPF National Outcomes mapping
+NPF_MAPPING = [
+    ("Environment",   "We value, enjoy, protect and enhance our environment.",
+     "environmental_burden"),
+    ("Communities",   "We live in communities that are inclusive, empowered, resilient and safe.",
+     "vulnerability_exposure"),
+    ("Economy",       "We have a globally competitive, entrepreneurial, inclusive and sustainable economy.",
+     "community_benefit"),
+    ("Fair Work",     "We have thriving and innovative businesses, with quality jobs and fair work for everyone.",
+     "community_benefit"),
+]
+
 CONFIDENCE_COLOURS = {"high": "#2e7d32", "medium": "#e65100", "low": "#b71c1c"}
 
 # Map colour-by options: display label → (column, colorscale, invert, unit)
@@ -486,25 +533,51 @@ def render_scorecard(row: pd.Series):
     )
     st.plotly_chart(d_fig, width="stretch", key=f"distribution_{row['area_name']}")
 
-    # ── Risk chips ────────────────────────────────────────────────────────────
-    chips = [
-        RISK_CHIP_LABELS[col]
-        for col, thr in BURDEN_THRESHOLDS.items()
-        if float(row[f"{col}_score"]) >= thr
-    ]
+    # ── Risk chips (siting indicators + McLellan 2026 health risks) ─────────────
+    st.markdown("**Risk flags**")
+    st.caption(
+        "Raised automatically from indicator thresholds and McLellan (2026) "
+        "public health criteria. These are screening flags — each requires "
+        "site-specific assessment before any planning decision."
+    )
+
+    chips = []
+    # Siting indicator thresholds
+    for col, thr in BURDEN_THRESHOLDS.items():
+        if float(row[f"{col}_score"]) >= thr:
+            chips.append(("#b71c1c", f"⚠ {RISK_CHIP_LABELS[col]}"))
+
+    # McLellan (2026) health risk flags
+    pop_d = int(row["pop_density_per_km2"])
+    is_urban = str(row["urban_rural_class"]) == "Urban"
+    env_b = float(row["environmental_burden"])
+
+    if pop_d > 500:
+        chips.append(("#6a1a1a", f"⚠ {MCLELLAN_RISKS['diesel_generator']['label']}"))
+    if is_urban and env_b > 60:
+        chips.append(("#bf360c", f"⚠ {MCLELLAN_RISKS['urban_heat_island']['label']}"))
+    if pop_d > 300:
+        chips.append(("#4a148c", f"⚠ {MCLELLAN_RISKS['noise_nuisance']['label']}"))
+    if env_b > 75:
+        chips.append(("#01579b", f"⚠ {MCLELLAN_RISKS['water_competition']['label']}"))
+
+    # Renewable energy advantage flag
+    is_ssen = str(row["dno_zone"]) == "SSEN SHEPD"
+    env_low = float(row["environmental_burden"]) < 50
+    if is_ssen and env_low:
+        chips.append(("#1b5e20", "✓ Renewable energy advantage — SSEN SHEPD zone near offshore/onshore wind; potential for near-zero carbon data centre operations"))
+
     if chips:
         chip_html = "".join(
-            f"<span style='background:#b71c1c;color:white;border-radius:10px;"
-            f"padding:3px 10px;margin:3px;font-size:0.78rem;display:inline-block'>⚠ {c}</span>"
-            for c in chips
+            f"<span style='background:{col};color:white;border-radius:10px;"
+            f"padding:4px 11px;margin:3px 3px 3px 0;font-size:0.78rem;"
+            f"display:inline-block;line-height:1.4'>{label}</span>"
+            for col, label in chips
         )
-        st.markdown(
-            "**Risk flags** (burden indicator scored ≥ 3/5):<br>" + chip_html,
-            unsafe_allow_html=True,
-        )
+        st.markdown(chip_html, unsafe_allow_html=True)
     else:
         st.markdown(
-            "<span style='color:#2e7d32;font-size:0.85rem'>✓ No high-threshold risk flags</span>",
+            "<span style='color:#2e7d32;font-size:0.85rem'>✓ No risk flags raised</span>",
             unsafe_allow_html=True,
         )
 
@@ -552,6 +625,45 @@ def render_scorecard(row: pd.Series):
         "high":   "Indicators are well evidenced across all dimensions.",
     }.get(conf, ""))
     st.markdown(f"**Weighted total score:** `{row['weighted_total']:.1f} / 100`")
+
+    st.divider()
+
+    # ── Responsible AI governance checklist ───────────────────────────────────
+    st.markdown("**Responsible AI governance checklist**")
+    st.caption(
+        "Based on Scotland's AI Strategy 2026–2031 principles: trustworthy, ethical, "
+        "inclusive, transparent, accountable, human-overseen AI infrastructure."
+    )
+    for check, passed in AI_STRATEGY_CHECKS:
+        icon   = "✅" if passed else "❌"
+        colour = "#1b5e20" if passed else "#b71c1c"
+        st.markdown(
+            f"<span style='color:{colour};font-size:0.85rem'>{icon} {check}</span>",
+            unsafe_allow_html=True,
+        )
+    st.caption(
+        "❌ items are not blocking — they are the next steps a policymaker "
+        "would commission after this screening tool identifies a candidate site."
+    )
+
+    st.divider()
+
+    # ── NPF National Outcomes alignment ───────────────────────────────────────
+    st.markdown("**National Performance Framework alignment**")
+    st.caption("How this scorecard supports Scotland's NPF National Outcomes.")
+    for outcome, desc, indicator in NPF_MAPPING:
+        score = float(row.get(f"{indicator}_score", 0))
+        bar_pct = int(score / 5 * 100)
+        colour = "#2e7d32" if score >= 3 else "#e65100" if score >= 1.5 else "#b71c1c"
+        st.markdown(
+            f"<div style='margin-bottom:6px'>"
+            f"<span style='font-size:0.8rem;font-weight:600;color:#333'>{outcome}</span> "
+            f"<span style='font-size:0.75rem;color:#888'>— {desc}</span><br>"
+            f"<div style='background:#eee;border-radius:4px;height:8px;width:100%;margin-top:3px'>"
+            f"<div style='background:{colour};border-radius:4px;height:8px;width:{bar_pct}%'></div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
